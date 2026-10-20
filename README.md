@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/xuechunz38-stack/IDS706-SQL-Quiz/actions/workflows/ci.yml/badge.svg)](https://github.com/xuechunz38-stack/IDS706-SQL-Quiz/actions/workflows/ci.yml)
 
-**Quiz site: <QUIZ_URL>**
+**Quiz site: https://ids706-sql-quiz12.streamlit.app/**
 
 A small TA-style SQL quiz. You sign in, pick a question, type a SQL query, press **Run**, and see the rows it returns from a live PostgreSQL database hosted on Supabase. The quiz has five questions worth 20 points in total. Each question includes a hint with the expected SQL and the expected result.
 
