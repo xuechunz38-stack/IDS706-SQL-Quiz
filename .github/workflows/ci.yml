@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 13 * * *"   # daily health check of the hosted database
+
+jobs:
+  unit-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - run: pytest -v
+
+  database-check:
+    # Connects to the hosted Supabase Postgres using a GitHub Secret.
+    runs-on: ubuntu-latest
+    needs: unit-tests
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - name: Fail early if the secret is missing
+        run: test -n "$DATABASE_URL" || (echo "DATABASE_URL secret is not set" && exit 1)
+      - name: Check data, hints, role privileges and audit log integrity
+        run: python scripts/check_db.py
