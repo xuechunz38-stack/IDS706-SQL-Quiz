@@ -1,5 +1,7 @@
 """The quiz: five SQL questions, 4 points each (20 total).
 
+nl_question is the plain-text version used as input to the Ask AI (RAG) page.
+
 hint_result is the expected output of hint_sql. scripts/check_db.py re-runs
 every hint_sql in CI and fails if the database disagrees with it.
 """
@@ -7,6 +9,7 @@ every hint_sql in CI and fails if the database disagrees with it.
 QUESTIONS = [
     {
         "id": 1,
+        "nl_question": "List the full_name of every MIDS student who started in 2025, in alphabetical order.",
         "title": "Filter and sort",
         "points": 4,
         "prompt": (
@@ -26,6 +29,7 @@ QUESTIONS = [
     },
     {
         "id": 2,
+        "nl_question": "For each course that has at least one enrollment, return course_id, title and the number of distinct students as n_students, sorted by n_students descending, then course_id.",
         "title": "GROUP BY with a join",
         "points": 4,
         "prompt": (
@@ -54,6 +58,7 @@ QUESTIONS = [
     },
     {
         "id": 3,
+        "nl_question": "Return each department and its average grade across all enrollments, rounded to 1 decimal place, as avg_grade, sorted by avg_grade descending.",
         "title": "Aggregate by department",
         "points": 4,
         "prompt": (
@@ -74,6 +79,7 @@ QUESTIONS = [
     },
     {
         "id": 4,
+        "nl_question": "Which students are taking 3 or more courses in Fall 2026? Return full_name and n_courses, sorted by n_courses descending, then full_name.",
         "title": "HAVING",
         "points": 4,
         "prompt": (
@@ -102,6 +108,7 @@ QUESTIONS = [
     },
     {
         "id": 5,
+        "nl_question": "Which courses in the catalog have no enrollments at all? Return course_id and title.",
         "title": "What does this query return?",
         "points": 4,
         "prompt": (

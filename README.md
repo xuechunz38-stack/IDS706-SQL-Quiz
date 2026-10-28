@@ -1,10 +1,12 @@
-# IDS706 SQL Quiz: Graduate Course Enrollments
+# IDS706 SQL Quiz + RAG Text-to-SQL: Graduate Course Enrollments
 
 [![CI](https://github.com/xuechunz38-stack/IDS706-SQL-Quiz/actions/workflows/ci.yml/badge.svg)](https://github.com/xuechunz38-stack/IDS706-SQL-Quiz/actions/workflows/ci.yml)
 
 **Quiz site: https://ids706-sql-quiz12.streamlit.app/**
 
 A small TA-style SQL quiz. You sign in, pick a question, type a SQL query, press **Run**, and see the rows it returns from a live PostgreSQL database hosted on Supabase. The quiz has five questions worth 20 points in total. Each question includes a hint with the expected SQL and the expected result.
+
+**Week 8:** the site also has an **🤖 Ask AI (RAG)** mode. You type a question in plain English. The app retrieves relevant schema, business rules and example queries from a **ChromaDB** vector database, and **Google Gemini** turns that context into SQL. The SQL then runs read-only against Supabase, and the result is checked against the quiz answer. See [RAG Text-to-SQL (Week 8)](#rag-text-to-sql-week-8).
 
 ## How to take the quiz
 
@@ -78,18 +80,82 @@ The `quiz` and `app` schemas are not exposed through Supabase's REST API, and th
   * Triggers block `UPDATE`, `DELETE` and `TRUNCATE` on `app.audit_log` for every role, including the owner.
   * Each row stores a SHA-256 hash of the previous row (`prev_hash` → `row_hash`), forming a hash chain. `scripts/check_db.py` recomputes the chain in CI and fails if any row was edited or removed, even if someone disabled the triggers first. It also checks with `has_table_privilege` that the roles have exactly the intended privileges.
 
+## RAG Text-to-SQL (Week 8)
+
+### Try it
+
+1. Open the site and sign in (or sign up) in the sidebar.
+2. In the sidebar, switch **Mode** to **🤖 Ask AI (RAG)**.
+3. Pick one of the five quiz questions, or choose **✏️ Ask my own question** and type anything about the data.
+4. Click **✨ Generate SQL**. The page shows each step of the pipeline:
+   1. **Retrieved context:** the documents ChromaDB returned, with their cosine distances.
+   2. **Generated SQL:** the query Gemini wrote from that context.
+   3. **Executed read-only:** the result table from Supabase (extra credit).
+   4. **Validation:** ✅ or ❌ against the quiz question's expected answer (extra credit).
+
+![Question and generated SQL](docs/screenshot_generated_sql.png)
+
+![Executed SQL, result table and validation](docs/screenshot_validation.png)
+
+### Architecture
+
+```
+question ─► embed (all-MiniLM-L6-v2, local ONNX) ─► ChromaDB similarity search
+                                                       │ top 3 schema docs
+                                                       │ top 4 business rules
+                                                       │ top 3 few-shot examples
+                                                       ▼
+                         prompt = system instructions + retrieved context + question
+                                                       ▼
+                        Google Gemini (gemini-3.5-flash, OpenAI-compatible API)
+                                                       ▼
+                     generated SQL ─► db.check_sql ─► Postgres as quiz_taker (read-only)
+                                                       ▼
+                               result table ─► compare with the quiz's expected result
+```
+
+| Requirement | How it is met |
+|---|---|
+| PostgreSQL integration | Reuses the Week 7 Supabase database. The schema documents in the vector store are generated from the live Postgres catalog (`pg_attribute`, `pg_constraint`) together with the distinct values of `program`, `department` and `semester`. Generated SQL runs against the same database. |
+| Vector database | **ChromaDB** (in-process, cosine distance) built in [`rag.py`](rag.py). It holds 25 documents: 3 schema docs, 12 business rules and 10 few-shot question/SQL pairs from [`knowledge.py`](knowledge.py). The few-shot questions are deliberately different from the quiz questions. Embeddings use Chroma's default local model, so no embedding API is needed. |
+| Retrieval | `rag.retrieve` runs a similarity query per document type and returns the closest documents. Only the retrieved documents go into the prompt. The page shows exactly what was retrieved. |
+| AI API | **Google Gemini** through its OpenAI-compatible endpoint (`openai` Python SDK). If the primary model returns 503 or 429, the app falls back to `gemini-3.1-flash-lite` and then `gemini-flash-lite-latest`. Any OpenAI-compatible provider works through `LLM_BASE_URL` / `LLM_MODEL`. (The Duke AI Gateway was the first choice, but it is only reachable from inside Duke's network, so the deployed site could not use it.) |
+| Web app | New **Ask AI (RAG)** mode in the existing Streamlit app. It requires sign-in, which also protects the API quota. Each generation is written to the audit log with action `ai`. |
+| Extra credit: execution | The SQL passes `db.check_sql` (one `SELECT`/`WITH` only) and runs as the read-only `quiz_taker` role in a read-only transaction with a 5 s timeout. |
+| Extra credit: validation | `db.results_match` compares the result set with the quiz question's `hint_result`, ignoring row order and column names. |
+
+### Accuracy
+
+`scripts/check_rag.py` runs the whole pipeline on the five quiz questions. Latest local run with `gemini-3.5-flash`: **5/5 correct**. It runs in GitHub Actions too. When the `LLM_API_KEY` secret is set, the job also generates and validates SQL; otherwise it checks retrieval only.
+
+### Run it locally
+
+```bash
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env          # add LLM_API_KEY plus the Week 7 database settings
+python scripts/check_rag.py   # retrieval + generation + validation on the 5 quiz questions
+streamlit run app.py          # then choose Mode → Ask AI (RAG)
+```
+
+On Streamlit Community Cloud, add `LLM_API_KEY = "<key>"` to the app's **Secrets**. The first page load downloads the embedding model (about 80 MB) and builds the vector store; later questions reuse it.
+
 ## Repository layout
 
 ```
-app.py                  Streamlit UI: auth, question pages, run/save
+app.py                  Streamlit UI: auth, quiz pages, run/save, Ask AI (RAG) page
 db.py                   SQL guard, read-only runner, result comparison
-questions.py            The 5 questions with hint SQL and expected results
+rag.py                  RAG pipeline: schema docs from Postgres, ChromaDB store, retrieval, LLM call
+knowledge.py            Business rules and few-shot examples for the vector store
+questions.py            The 5 questions with hint SQL, expected results and plain-text versions
 sql/schema.sql          Schemas, tables, RLS, audit triggers + hash chain
 sql/seed.sql            Dataset
 sql/grants.sql          Privileges and RLS policies for quiz_taker / quiz_app
 scripts/seed.py         Applies the SQL, loads questions, creates roles
 scripts/check_db.py     CI health check against the hosted database
+scripts/check_rag.py    End-to-end RAG check (retrieval, generation, validation)
 tests/test_db.py        Unit tests (no database needed)
+tests/test_rag.py       Unit tests for SQL extraction, prompt building and retrieval
 .github/workflows/ci.yml
 ```
 

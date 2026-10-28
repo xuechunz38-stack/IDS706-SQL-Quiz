@@ -24,6 +24,7 @@ jobs:
     needs: unit-tests
     env:
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
@@ -34,3 +35,5 @@ jobs:
         run: test -n "$DATABASE_URL" || (echo "DATABASE_URL secret is not set" && exit 1)
       - name: Check data, hints, role privileges and audit log integrity
         run: python scripts/check_db.py
+      - name: RAG pipeline (vector retrieval, plus LLM generation if LLM_API_KEY is set)
+        run: python scripts/check_rag.py

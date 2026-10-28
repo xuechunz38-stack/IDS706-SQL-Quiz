@@ -6,19 +6,27 @@ import pandas as pd
 import psycopg
 import streamlit as st
 from dotenv import load_dotenv
+from openai import OpenAI
 from supabase import create_client
 
 import db
+import rag
+from questions import QUESTIONS
 
 load_dotenv()
 st.set_page_config(page_title="SQL Quiz: Course Enrollments", page_icon="🗄️", layout="wide")
 
 
-def cfg(key):
+_MISSING = object()
+
+
+def cfg(key, default=_MISSING):
     try:
         return st.secrets[key]
     except (KeyError, FileNotFoundError):
-        return os.environ[key]
+        if default is _MISSING:
+            return os.environ[key]
+        return os.environ.get(key, default)
 
 
 # ------------------------------------------------------------------ auth
@@ -188,6 +196,103 @@ def question_page(q, user):
         st.success("Answer saved.")
 
 
+# ------------------------------------------------------------ Ask AI (RAG)
+DEFAULT_LLM_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"  # Gemini (OpenAI-compatible)
+DEFAULT_LLM_MODEL = "gemini-3.5-flash"
+FALLBACK_LLM_MODELS = ["gemini-3.1-flash-lite", "gemini-flash-lite-latest"]
+
+
+@st.cache_resource(show_spinner="Building the vector database (first load only)...")
+def vector_store():
+    # Schema documents come from the live Postgres catalog, read as quiz_taker.
+    return rag.build_store(rag.schema_documents(cfg("TAKER_DATABASE_URL")))
+
+
+@st.cache_resource
+def llm_client():
+    return OpenAI(
+        base_url=cfg("LLM_BASE_URL", DEFAULT_LLM_BASE_URL), api_key=cfg("LLM_API_KEY"),
+        timeout=60, max_retries=1,
+    )
+
+
+CUSTOM = "✏️ Ask my own question"
+
+
+def ask_ai_page(user):
+    st.subheader("🤖 Ask AI: natural language → SQL (RAG)")
+    st.write(
+        "Your question is embedded and matched against a **ChromaDB** vector database of "
+        "schema descriptions, business rules and example queries. The retrieved context "
+        "is sent to **Google Gemini**, which writes the SQL. The SQL then "
+        "runs read-only against the live database and is checked against the quiz answer."
+    )
+    options = [f"Q{q['id']}. {q['nl_question']}" for q in QUESTIONS] + [CUSTOM]
+    picked = st.selectbox("Pick a quiz question or ask your own", options)
+    quiz_q = None if picked == CUSTOM else QUESTIONS[options.index(picked)]
+    question = st.text_area(
+        "Question", value="" if quiz_q is None else quiz_q["nl_question"], height=90,
+        key=f"nlq_{picked}", placeholder="e.g. Which MIDS students got above 90 in IDS706?",
+    )
+    if not user:
+        st.info("Sign in (sidebar) to generate SQL.")
+    if not st.button("✨ Generate SQL", type="primary", disabled=not user):
+        return
+    if not question.strip():
+        st.error("Enter a question first.")
+        return
+
+    with st.spinner("Retrieving context..."):
+        hits = rag.retrieve(vector_store(), question)
+    with st.expander(f"1 · Retrieved context ({len(hits)} documents from ChromaDB)", expanded=True):
+        st.dataframe(
+            pd.DataFrame(
+                [{"type": h["type"], "id": h["id"], "distance": round(h["distance"], 3),
+                  "text": h["text"]} for h in hits]
+            ),
+            hide_index=True,
+        )
+
+    models = [cfg("LLM_MODEL", DEFAULT_LLM_MODEL)] + FALLBACK_LLM_MODELS
+    try:
+        with st.spinner(f"Asking {models[0]}..."):
+            sql_text, model = rag.generate_sql(llm_client(), models, question, hits)
+    except Exception as exc:
+        st.error(f"AI API call failed: {exc}")
+        return
+    st.markdown(f"**2 · Generated SQL** (model: `{model}`)")
+    st.code(sql_text, language="sql")
+
+    st.markdown("**3 · Executed read-only against Supabase**")
+    cleaned, err = db.check_sql(sql_text)
+    if err:
+        audit(user, "ai", quiz_q and quiz_q["id"], sql_text, success=False, error=err)
+        st.error(f"Not executed: {err}")
+        return
+    try:
+        columns, rows, truncated = db.run_readonly(cfg("TAKER_DATABASE_URL"), cleaned)
+    except psycopg.Error as exc:
+        msg = str(exc).strip()
+        audit(user, "ai", quiz_q and quiz_q["id"], cleaned, success=False, error=msg)
+        st.error(msg)
+        return
+    audit(user, "ai", quiz_q and quiz_q["id"], cleaned, row_count=len(rows))
+    st.caption(f"{len(rows)} row(s){' (showing first 200)' if truncated else ''}")
+    st.dataframe(frame(columns, rows), hide_index=True)
+
+    st.markdown("**4 · Validation**")
+    if quiz_q is None:
+        st.info("Custom question: there is no expected answer to compare against.")
+    elif db.results_match(columns, rows, quiz_q["hint_result"]):
+        st.success(f"✅ Correct: the result matches the expected answer for Q{quiz_q['id']}.")
+    else:
+        st.error(f"❌ Incorrect: the result differs from the expected answer for Q{quiz_q['id']}.")
+        st.dataframe(
+            frame(quiz_q["hint_result"]["columns"], quiz_q["hint_result"]["rows"]),
+            hide_index=True,
+        )
+
+
 def main():
     auth_sidebar()
     user = current_user()
@@ -199,6 +304,11 @@ def main():
     )
     with st.expander("Database schema", expanded=False):
         st.markdown(SCHEMA_DOC)
+
+    mode = st.sidebar.radio("Mode", ["📝 Take the quiz", "🤖 Ask AI (RAG)"])
+    if mode.startswith("🤖"):
+        ask_ai_page(user)
+        return
 
     questions = load_questions()
     labels = [f"Q{q['id']}. {q['title']} ({q['points']} pts)" for q in questions]

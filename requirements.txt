@@ -4,3 +4,5 @@ supabase>=2.10
 python-dotenv>=1.0
 pandas>=2.0
 pytest>=8.0
+chromadb>=1.0
+openai>=1.50
