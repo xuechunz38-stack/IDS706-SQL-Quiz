@@ -4,6 +4,8 @@
 
 **Quiz site: https://ids706-sql-quiz12.streamlit.app/**
 
+> The free Streamlit tier puts the app to sleep after a period of inactivity. If you see "Zzzz", click **Yes, get this app back up!** and wait a minute or two.
+
 A small TA-style SQL quiz. You sign in, pick a question, type a SQL query, press **Run**, and see the rows it returns from a live PostgreSQL database hosted on Supabase. The quiz has five questions worth 20 points in total. Each question includes a hint with the expected SQL and the expected result.
 
 **Week 8:** the site also has an **🤖 Ask AI (RAG)** mode. You type a question in plain English. The app retrieves relevant schema, business rules and example queries from a **ChromaDB** vector database, and **Google Gemini** turns that context into SQL. The SQL then runs read-only against Supabase, and the result is checked against the quiz answer. See [RAG Text-to-SQL (Week 8)](#rag-text-to-sql-week-8).
@@ -93,9 +95,11 @@ The `quiz` and `app` schemas are not exposed through Supabase's REST API, and th
    3. **Executed read-only:** the result table from Supabase (extra credit).
    4. **Validation:** ✅ or ❌ against the quiz question's expected answer (extra credit).
 
-![Question and generated SQL](docs/screenshot_generated_sql.png)
+Screenshots from the deployed site (question Q5):
 
-![Executed SQL, result table and validation](docs/screenshot_validation.png)
+![Question, retrieved context and generated SQL](docs/screenshot_generated_sql.jpg)
+
+![Executed SQL, result table and validation](docs/screenshot_validation.jpg)
 
 ### Architecture
 
